@@ -1,18 +1,23 @@
 {
   "name": "starthub-test",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "StartHub Media AI - Organizational DNA Assessment",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.57.0",
     "@deepgram/sdk": "^4.11.1",
     "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "googleapis": "^154.1.0",
