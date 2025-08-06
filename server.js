@@ -276,4 +276,4 @@ app.listen(PORT, () => {
     gemini: !!process.env.GEMINI_API_KEY,
     anthropic: !!process.env.ANTHROPIC_API_KEY // Changed from CLAUDE_API_KEY
   });
-});
+});// Force redeploy Wed Aug  6 10:17:12 UTC 2025
