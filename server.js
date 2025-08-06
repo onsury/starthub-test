@@ -1,389 +1,279 @@
+// server.js - COMPLETE FILE - Replace your entire server.js with this
 require('dotenv').config();
 const express = require('express');
-const multer = require('multer');
 const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
+const axios = require('axios');
+const FormData = require('form-data');
+const multer = require('multer');
+const fs = require('fs');
+
+// Import official SDKs
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Anthropic = require('@anthropic-ai/sdk');
-const { Groq } = require('groq-sdk');
-const { createClient } = require('@deepgram/sdk');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const upload = multer({ dest: 'uploads/' });
 
-// Initialize AI services
-const anthropic = new Anthropic({
-    apiKey: process.env.CLAUDE_API_KEY,
-});
-
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-});
-
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const gemini = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-// Configure CORS to allow your frontend
+// IMPORTANT: Allow requests from your Netlify frontend
 app.use(cors({
-    origin: [
-        'https://smartdna.netlify.app',
-        'https://smart-deep-neural-assessment-dna.onrender.com',
-        'http://localhost:3000',
-        'http://localhost:5000'
-    ],
-    credentials: true
+  origin: ['https://smartdna.netlify.app', 'http://localhost:3000', 'http://localhost:5000'],
+  credentials: true
 }));
 
-app.use(express.json());
-app.use(express.static('public'));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Configure multer for file uploads
-const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB limit
-    }
+// DO NOT serve static files - remove this line if it exists
+// app.use(express.static('public'));
+
+// Initialize SDKs
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY, // Changed from CLAUDE_API_KEY
 });
 
-// Simple in-memory store for reports
-const reportStore = {};
+// ============== Sarvam AI Integration ==============
+class SarvamService {
+  constructor() {
+    this.apiKey = process.env.SARVAM_API_KEY;
+    this.baseURL = 'https://api.sarvam.ai';
+  }
 
-// Root route
-app.get('/', (req, res) => {
-    res.send(`
-        <html>
-            <head>
-                <title>StartHub Media AI - Backend</title>
-            </head>
-            <body style="font-family: Arial; text-align: center; padding: 50px;">
-                <h1>StartHub Media AI</h1>
-                <h2>Organizational DNA Assessment Platform</h2>
-                <p>Backend Server Running Successfully!</p>
-                <p>API Endpoint: POST /api/process-interview</p>
-                <p>Frontend: <a href="https://smartdna.netlify.app">https://smartdna.netlify.app</a></p>
-            </body>
-        </html>
-    `);
-});
-
-// Helper function to transcribe with Deepgram
-async function transcribeWithDeepgram(audioBuffer) {
+  async transcribeAudio(audioFilePath, language = 'hi-IN') {
     try {
-        console.log('  - Transcribing with Deepgram...');
-        
-        const { result } = await deepgram.listen.prerecorded.transcribeFile(
-            audioBuffer,
+      const formData = new FormData();
+      formData.append('file', fs.createReadStream(audioFilePath));
+      formData.append('language_code', language);
+      
+      const response = await axios.post(
+        `${this.baseURL}/speech-to-text`,
+        formData,
+        {
+          headers: {
+            ...formData.getHeaders(),
+            'API-Subscription-Key': this.apiKey
+          }
+        }
+      );
+      
+      return response.data.transcript;
+    } catch (error) {
+      console.error('Sarvam STT Error:', error.response?.data || error.message);
+      throw error;
+    }
+  }
+}
+
+// ============== OpenRouter Integration ==============
+class OpenRouterService {
+  constructor() {
+    this.apiKey = process.env.OPENROUTER_API_KEY;
+    this.baseURL = 'https://openrouter.ai/api/v1';
+  }
+
+  async callSarvamM(prompt, language = 'hi') {
+    try {
+      const response = await axios.post(
+        `${this.baseURL}/chat/completions`,
+        {
+          model: 'sarvamai/sarvam-2b-v0.5', // Update with exact model name from OpenRouter
+          messages: [
             {
-                model: 'nova-2',
-                language: 'en',
-                punctuate: true,
-                smart_format: true,
+              role: 'system',
+              content: `You are an AI assistant specialized in Indian business culture and languages. 
+                       Understand context about family businesses, joint families, tier-2/3 cities, 
+                       and Indian entrepreneurship. Respond thoughtfully considering Indian cultural nuances.`
+            },
+            {
+              role: 'user',
+              content: prompt
             }
-        );
-        
-        const transcript = result.results.channels[0].alternatives[0].transcript;
-        
-        return {
-            transcript: transcript,
-            language: 'en',
-            confidence: result.results.channels[0].alternatives[0].confidence * 100
-        };
-        
+          ],
+          temperature: 0.7,
+          max_tokens: 1500
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://smartdna.netlify.app',
+            'X-Title': 'StartHub AI Assessment'
+          }
+        }
+      );
+
+      return response.data.choices[0].message.content;
     } catch (error) {
-        console.log('  ✗ Deepgram failed:', error.message);
-        throw error;
+      console.error('OpenRouter Error:', error.response?.data || error.message);
+      throw error;
     }
+  }
 }
 
-// Helper function to transcribe with Vapi (fallback)
-async function transcribeWithVapi(audioBuffer) {
-    try {
-        console.log('  - Attempting transcription with Vapi...');
-        // Vapi implementation would go here
-        // For now, returning error as Vapi needs different setup
-        throw new Error('Vapi transcription not implemented yet');
-    } catch (error) {
-        console.log('  ✗ Vapi failed:', error.message);
-        throw error;
-    }
+// ============== Gemini Integration ==============
+async function callGemini(prompt) {
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text();
+  } catch (error) {
+    console.error('Gemini Error:', error);
+    throw error;
+  }
 }
 
-// Main interview processing endpoint
-app.post('/api/process-interview', upload.single('audio'), async (req, res) => {
-    console.log('\n========== NEW INTERVIEW PROCESS STARTED ==========');
-    console.log('Time:', new Date().toLocaleString());
+// ============== Claude Integration ==============
+async function callClaude(prompt) {
+  try {
+    const message = await anthropic.messages.create({
+      model: 'claude-3-haiku-20240307',
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: prompt
+      }]
+    });
     
-    const startTime = Date.now();
+    return message.content[0].text;
+  } catch (error) {
+    console.error('Claude Error:', error);
+    throw error;
+  }
+}
+
+// Initialize services
+const sarvam = new SarvamService();
+const openRouter = new OpenRouterService();
+
+// ============== Main Assessment Endpoint ==============
+app.post('/api/assess', upload.single('audio'), async (req, res) => {
+  let audioPath = null;
+  
+  try {
+    const { language = 'hi-IN', textInput, mode = 'voice' } = req.body;
+    let transcribedText = textInput;
     
-    try {
-        // Extract form data
-        console.log('STEP 1 ✓ - Form Data Received:');
-        const { founderName, companyName, email, phone, textContent, language, inputType } = req.body;
-        console.log('  - Founder:', founderName);
-        console.log('  - Company:', companyName);
-        console.log('  - Email:', email);
-        console.log('  - Input Type:', inputType || 'voice');
-        
-        // Initialize variables
-        let transcript = '';
-        let detectedLanguage = 'en';
-        let englishTranscript = '';
-        
-        // Check if this is text input
-        if (inputType === 'text' && textContent) {
-            console.log('\nSTEP 2 - Processing Text Input:');
-            console.log('  - Text length:', textContent.length);
-            console.log('  - Selected language:', language);
-            
-            transcript = textContent;
-            detectedLanguage = language || 'en';
-            
-            // Translate if not English
-            if (detectedLanguage !== 'en') {
-                console.log('\nSTEP 3 - Translating Text:');
-                try {
-                    const translationPrompt = `Translate the following ${detectedLanguage} text to English. Return only the translation, nothing else:\n\n${textContent}`;
-                    const result = await gemini.generateContent(translationPrompt);
-                    englishTranscript = result.response.text();
-                    console.log('  ✓ Translation complete');
-                } catch (error) {
-                    console.log('  ⚠️ Translation failed, using original text');
-                    englishTranscript = textContent;
-                }
-            } else {
-                englishTranscript = textContent;
-            }
-            
-        } else {
-            // Process audio file
-            const audioFile = req.file;
-            if (!audioFile) {
-                throw new Error('No audio file or text content provided');
-            }
-            
-            console.log('STEP 2 - Checking Audio File:');
-            console.log('  ✓ Audio file received');
-            console.log('  - Size:', audioFile.size, 'bytes');
-            console.log('  - Type:', audioFile.mimetype);
-            
-            const audioBuffer = audioFile.buffer;
-            console.log('STEP 3 - Reading Audio File:');
-            console.log('  ✓ File read successfully');
-            console.log('  - Buffer size:', audioBuffer.length, 'bytes');
-            
-            // Transcribe audio
-            console.log('\nSTEP 4 - Voice Processing:');
-            let transcriptionResult;
-            
-            try {
-                // Try Vapi first
-                transcriptionResult = await transcribeWithVapi(audioBuffer);
-            } catch (vapiError) {
-                console.log('  ⚠️ Vapi failed, trying Deepgram...');
-                try {
-                    // Fall back to Deepgram
-                    transcriptionResult = await transcribeWithDeepgram(audioBuffer);
-                } catch (deepgramError) {
-                    throw new Error('Both transcription services failed');
-                }
-            }
-            
-            transcript = transcriptionResult.transcript;
-            detectedLanguage = transcriptionResult.language;
-            englishTranscript = transcript; // Already in English
-            
-            console.log('  ✓ Transcription complete');
-            console.log('  - Detected language:', detectedLanguage);
-            console.log('  - Confidence:', transcriptionResult.confidence + '%');
-            console.log('  - Length:', transcript.length, 'characters');
-            console.log('  - Preview:', transcript.substring(0, 100) + '...');
-        }
-        
-        // Validate transcript
-        if (!transcript || transcript.length < 50) {
-            throw new Error('Transcript too short - please speak for at least 30 seconds about your company');
-        }
-        
-        // Quick insights with Groq
-        console.log('\nSTEP 5 - Quick Analysis:');
-        let quickInsights = '';
-        
-        try {
-            const groqResponse = await groq.chat.completions.create({
-                messages: [{
-                    role: "system",
-                    content: "Extract key business insights in 3 bullet points."
-                }, {
-                    role: "user",
-                    content: englishTranscript
-                }],
-                model: "mixtral-8x7b-32768",
-                max_tokens: 200,
-            });
-            
-            quickInsights = groqResponse.choices[0]?.message?.content || '';
-            console.log('  ✓ Quick insights generated');
-        } catch (error) {
-            console.log('  ⚠️ Groq failed, skipping quick insights');
-        }
-        
-        // Deep analysis with Claude
-        console.log('\nSTEP 6 - Deep Analysis:');
-        console.log('  - Analyzing with Claude...');
-        
-        const claudeResponse = await anthropic.messages.create({
-            model: "claude-3-5-haiku-20241022",
-            max_tokens: 1000,
-            messages: [{
-                role: "user",
-                content: `Analyze this founder interview transcript and provide:
-                1. Leadership DNA Pattern (2-3 sentences)
-                2. Core Organizational Challenge
-                3. Communication Style Assessment
-                4. One Immediate Action Item
-                
-                Keep it concise and actionable.
-                
-                Transcript: ${englishTranscript}`
-            }]
-        });
-        
-        const deepAnalysis = claudeResponse.content[0].text;
-        console.log('  ✓ Claude analysis complete');
-        
-        // Generate partial report
-        const partialReport = `
-ORGANIZATIONAL DNA ASSESSMENT - PRELIMINARY REPORT
-================================================
-
-Founder: ${founderName}
-Company: ${companyName}
-Date: ${new Date().toLocaleDateString()}
-Time: ${new Date().toLocaleTimeString()}
-
-QUICK INSIGHTS
---------------
-${quickInsights || 'Processing...'}
-
-LEADERSHIP DNA ANALYSIS
-----------------------
-${deepAnalysis}
-
-NEXT STEPS
-----------
-This preliminary report provides initial insights into your organizational DNA. 
-For a complete assessment including:
-- 6 Hub Implementation Strategy
-- Team Alignment Recommendations
-- 90-Day Action Plan
-- Customized Organizational Blueprint
-
-Please schedule a follow-up consultation.
-
-================================================
-Processing Time: ${((Date.now() - startTime) / 1000).toFixed(2)} seconds
-`;
-
-        // Store full report
-        const reportId = `RPT${Date.now()}`;
-        reportStore[reportId] = {
-            id: reportId,
-            founderName,
-            companyName,
-            email,
-            phone,
-            transcript,
-            englishTranscript,
-            detectedLanguage,
-            quickInsights,
-            deepAnalysis,
-            partialReport,
-            fullReport: null,
-            createdAt: new Date(),
-            processingTime: Date.now() - startTime
-        };
-        
-        console.log('\n✅ PROCESS COMPLETE!');
-        console.log(`Total time: ${((Date.now() - startTime) / 1000).toFixed(2)} seconds`);
-        
-        // Send response
-        res.json({
-            success: true,
-            reportId,
-            partialReport,
-            detectedLanguage: detectedLanguage === 'en' ? 'English' : 
-                             detectedLanguage === 'hi' ? 'Hindi' :
-                             detectedLanguage === 'ta' ? 'Tamil' :
-                             detectedLanguage === 'te' ? 'Telugu' : detectedLanguage,
-            message: 'Assessment completed successfully'
-        });
-        
-    } catch (error) {
-        console.log('\n❌ ❌ ❌ FATAL ERROR ❌ ❌ ❌');
-        console.log('Error Type:', error.constructor.name);
-        console.log('Error Message:', error.message);
-        console.log('Stack Trace:', error.stack);
-        
-        res.status(500).json({
-            success: false,
-            error: error.message || 'Processing failed',
-            details: 'Please ensure you speak clearly for at least 30 seconds about your company and challenges.'
-        });
-    }
-});
-
-// Get report endpoint
-app.get('/api/report/:reportId', (req, res) => {
-    const { reportId } = req.params;
-    const report = reportStore[reportId];
-    
-    if (!report) {
-        return res.status(404).json({
-            success: false,
-            error: 'Report not found'
-        });
+    // Step 1: Handle Voice Input
+    if (mode === 'voice' && req.file) {
+      audioPath = req.file.path;
+      console.log('Transcribing audio with Sarvam...');
+      transcribedText = await sarvam.transcribeAudio(audioPath, language);
+      console.log('Transcription:', transcribedText);
     }
     
+    if (!transcribedText) {
+      throw new Error('No input provided');
+    }
+    
+    // Step 2: Process with Multi-LLM System
+    console.log('Processing with AI pipeline...');
+    
+    // Sarvam-M Analysis (Indian Context)
+    const sarvamAnalysis = await openRouter.callSarvamM(`
+      Analyze this business assessment response considering Indian context:
+      "${transcribedText}"
+      
+      Focus on:
+      1. Business potential in Indian market
+      2. Cultural and family dynamics
+      3. Challenges specific to Indian entrepreneurs
+      4. Growth opportunities
+    `, language);
+    
+    // Gemini Analysis (General Business)
+    const geminiAnalysis = await callGemini(`
+      Provide business analysis for: "${transcribedText}"
+      Focus on market potential, scalability, and innovation.
+    `);
+    
+    // Claude Orchestration (Final Report)
+    const finalReport = await callClaude(`
+      Create a comprehensive business assessment report by combining these analyses:
+      
+      Indian Market Context Analysis:
+      ${sarvamAnalysis}
+      
+      Global Business Perspective:
+      ${geminiAnalysis}
+      
+      Original Response: "${transcribedText}"
+      
+      Structure the report with:
+      1. Executive Summary
+      2. Strengths Analysis
+      3. Growth Opportunities
+      4. Challenges & Solutions
+      5. Action Plan
+      6. Next Steps
+      
+      Make it professional yet accessible.
+    `);
+    
+    // Send Response
     res.json({
-        success: true,
-        report: report.partialReport,
-        createdAt: report.createdAt
+      success: true,
+      report: finalReport,
+      processedBy: 'StartHub AI Deep Neural Assessment',
+      timestamp: new Date().toISOString()
     });
+    
+  } catch (error) {
+    console.error('Assessment Error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Assessment processing failed. Please try again.',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    // Cleanup uploaded file
+    if (audioPath && fs.existsSync(audioPath)) {
+      fs.unlinkSync(audioPath);
+    }
+  }
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        services: {
-            claude: !!process.env.CLAUDE_API_KEY,
-            groq: !!process.env.GROQ_API_KEY,
-            deepgram: !!process.env.DEEPGRAM_API_KEY,
-            gemini: !!process.env.GEMINI_API_KEY,
-            vapi: !!process.env.VAPI_API_KEY
-        }
-    });
+// ============== Test Endpoints ==============
+app.get('/api/test', async (req, res) => {
+  res.json({
+    status: 'StartHub AI Multi-LLM System Active',
+    services: {
+      sarvam: !!process.env.SARVAM_API_KEY,
+      openRouter: !!process.env.OPENROUTER_API_KEY,
+      gemini: !!process.env.GEMINI_API_KEY,
+      anthropic: !!process.env.ANTHROPIC_API_KEY // Changed from CLAUDE_API_KEY
+    },
+    version: '2.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'healthy', timestamp: new Date() });
+});
+
+// Root endpoint - DO NOT serve HTML here
+app.get('/', (req, res) => {
+  res.json({
+    message: 'StartHub AI Assessment API',
+    frontend: 'https://smartdna.netlify.app',
+    endpoints: {
+      test: 'GET /api/test',
+      assess: 'POST /api/assess',
+      health: 'GET /health'
+    }
+  });
 });
 
 // Start server
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`
-    ================================================
-    🚀 StartHub Media AI Server Running
-    ================================================
-    Port: ${PORT}
-    Time: ${new Date().toLocaleString()}
-    
-    API Endpoints:
-    - POST /api/process-interview
-    - GET  /api/report/:reportId
-    - GET  /api/health
-    
-    Frontend URL: https://smartdna.netlify.app
-    ================================================
-    `);
+  console.log(`StartHub AI Server running on port ${PORT}`);
+  console.log('Services configured:', {
+    sarvam: !!process.env.SARVAM_API_KEY,
+    openRouter: !!process.env.OPENROUTER_API_KEY,
+    gemini: !!process.env.GEMINI_API_KEY,
+    anthropic: !!process.env.ANTHROPIC_API_KEY // Changed from CLAUDE_API_KEY
+  });
 });
