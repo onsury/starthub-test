@@ -1,3 +1,34 @@
+// server.js - Complete Multi-LLM Integration with Official SDKs
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const axios = require('axios');
+const FormData = require('form-data');
+const multer = require('multer');
+const fs = require('fs');
+
+// Import official SDKs
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Anthropic = require('@anthropic-ai/sdk');
+
+// ====== ADD THE DEBUG CODE RIGHT HERE ======
+// Debug specific keys
+console.log('=== API KEY DEBUG ===');
+console.log('Looking for SARVAM_API_KEY:', !!process.env.SARVAM_API_KEY);
+console.log('Looking for ANTHROPIC_API_KEY:', !!process.env.ANTHROPIC_API_KEY);
+if (!process.env.SARVAM_API_KEY) {
+  console.log('SARVAM_API_KEY is missing!');
+  console.log('Available keys:', Object.keys(process.env).filter(k => k.toLowerCase().includes('sarvam')));
+}
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.log('ANTHROPIC_API_KEY is missing!');
+  console.log('Available keys:', Object.keys(process.env).filter(k => k.toLowerCase().includes('anthrop')));
+}
+console.log('====================');
+// ====== END OF DEBUG CODE ======
+
+
+// ... rest of your code
 // server.js - COMPLETE FILE - Replace your entire server.js with this
 require('dotenv').config();
 const express = require('express');
