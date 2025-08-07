@@ -27,18 +27,6 @@ if (!process.env.ANTHROPIC_API_KEY) {
 console.log('====================');
 // ====== END OF DEBUG CODE ======
 
-
-// ... rest of your code
-// server.js - COMPLETE FILE - Replace your entire server.js with this
-require('dotenv').config();
-const FormData = require('form-data');
-const multer = require('multer');
-const fs = require('fs');
-
-// Import official SDKs
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const Anthropic = require('@anthropic-ai/sdk');
-
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
