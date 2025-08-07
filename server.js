@@ -31,9 +31,6 @@ console.log('====================');
 // ... rest of your code
 // server.js - COMPLETE FILE - Replace your entire server.js with this
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
 const FormData = require('form-data');
 const multer = require('multer');
 const fs = require('fs');
